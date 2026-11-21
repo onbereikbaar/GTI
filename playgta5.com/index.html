@@ -1,0 +1,936 @@
+<!doctype html>
+<html>
+
+<!-- Mirrored from https://playgta5.com/ by HTTrack Website Copier/3.x [XR&CO], Sat, 21 Nov 2026 16:29:21 GMT -->
+<!-- Added by HTTrack --><meta http-equiv="content-type" content="text/html;charset=utf-8" /><!-- /Added by HTTrack -->
+<head>
+<meta charset="utf-8">
+<title>game</title>
+<style>
+	html, body { margin: 0; height: 100%; background: #000; color: #ccc; font: 12px monospace; overflow: hidden; }
+	#canvas { display: block; position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; background: #000; }
+	/* title screen: the game's loading screen (LOADINGSCREEN_STARTUP) on its 1280x720 stage, scaled to the window; see the script below */
+	@font-face { font-family: 'Chalet'; src: url('b/d045dd0637/title/chalet.woff') format('woff'); }
+	#loading { position: fixed; inset: 0; background: #000; overflow: hidden; transition: opacity .8s; z-index: 5; }
+	#loading.done { opacity: 0; pointer-events: none; }
+	#ls-stage { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; transform-origin: 0 0; overflow: hidden; font: 12px Chalet, sans-serif; color: #fff; }
+	#ls-screens { position: absolute; inset: 0; }
+	.ls-screen { position: absolute; inset: 0; }
+	/* one camera per layer, so layers composite in display-list order like Scaleform (no depth test): 640 / tan(55 deg / 2) = 1229, Scaleform's default 3D camera
+	   at the stage centre (moved against the screen's slide, see the script) */
+	.ls-cam { position: absolute; inset: 0; perspective: 1229px; perspective-origin: 640px 360px; }
+	.ls-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; background-size: 100% 100%; }
+	#ls-logo { position: absolute; left: 95px; top: 492.5px; width: 186px; height: 186px; }
+	#ls-bars { position: absolute; right: 96px; top: 642px; display: flex; gap: 3px; }
+	/* the announcement: message.txt beside index.php on the host, put into the page by index.php (no request of its own); hidden when empty */
+	/* one line, never wrapped (a longer one scrolls sideways inside the box), and selectable: a player can copy it (Ctrl+C: passThrough lets it through when text is selected) */
+	#ls-news { position: absolute; right: 96px; top: 64px; max-width: 1088px; padding: 10px 12px 11px; background: rgba(0, 0, 0, .706); border-radius: 2.4px; font: 13px/1.45 Chalet, sans-serif;
+		white-space: pre; overflow-x: auto; overflow-y: hidden; user-select: text; -webkit-user-select: text; cursor: text; pointer-events: auto; text-shadow: .85px .85px 1px rgba(0, 0, 0, .45); }
+	#ls-news[hidden] { display: none; }
+	.ls-bar { height: 24px; padding: 0 6px; display: flex; align-items: center; background: rgba(0, 0, 0, .706); border-radius: 2.4px; white-space: nowrap; }
+	#modes { gap: 8px; }
+	#modes button { display: flex; align-items: center; height: 24px; padding: 0; border: 0; background: none; color: #fff; font: 12px Chalet, sans-serif; cursor: pointer; }
+	#modes button:disabled { cursor: default; }
+	#modes button[hidden] { display: none; }
+	#modes.ask button:not(:disabled) .ls-key { animation: ls-ask 1.2s ease-in-out infinite; }
+	@keyframes ls-ask { 50% { opacity: .35; } }
+	.ls-online { margin-left: 5px; color: rgba(255, 255, 255, .7); }
+	.ls-key { margin-left: 4px; min-width: 12px; height: 15px; padding: 0 4px; line-height: 16px; border-radius: 2px; background: #fff; color: #000; font-size: 10px; text-transform: uppercase; }
+	.ls-spin { flex: none; width: 22px; height: 22px; margin-left: 2px; background: url('b/d045dd0637/title/spinner.png') center / 24px 24px no-repeat; animation: ls-spin 2s steps(60) infinite; }
+	@keyframes ls-spin { from { transform: rotate(0deg) scaleX(-1); } to { transform: rotate(-360deg) scaleX(-1); } }
+	#label { text-shadow: .85px .85px 1px rgba(0, 0, 0, .45); }
+	#pct { margin-left: 15px; font-variant-numeric: tabular-nums; }
+	/* kept for now: the port's progress bar along the bottom edge, the newest log line centred above it and the data downloaded above that */
+	#ls-log { position: absolute; left: 8px; right: 8px; bottom: 6px; display: flex; flex-direction: column; align-items: center; font: 10px/1.35 Consolas, monospace; color: rgba(190, 190, 190, .75); text-shadow: 0 0 2px #000, 1px 1px 1px #000; white-space: pre; pointer-events: none; }
+	#console { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+	#data { color: #6a9; }
+	#bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255, 255, 255, .08); }
+	#fill { height: 100%; width: 0; background: #7cc576; }
+	#hud { position: fixed; left: 8px; bottom: 8px; max-width: 60vw; white-space: pre-wrap; opacity: .8; pointer-events: none; }
+	#fps { position: fixed; left: 8px; top: 6px; display: none; color: #0f0; font: bold 18px/1.2 Consolas, monospace; font-variant-numeric: tabular-nums; text-shadow: 1px 1px 2px #000, 0 0 3px #000; pointer-events: none; z-index: 10; }
+</style>
+</head>
+<body>
+<canvas id="canvas" width="800" height="600" tabindex="-1"></canvas>
+<div id="hud"></div>
+<div id="loading"><div id="ls-stage"><div id="ls-screens"></div><img id="ls-logo" src="b/d045dd0637/title/logo.png" alt=""><div id="ls-news" hidden></div><script>{ const d = new Date(), md = (d.getMonth() + 1) * 100 + d.getDate(); if (md >= 1026 && md <= 1105) document.getElementById('ls-logo').src = 'b/d045dd0637/title/logo_halloween.png'; }	// Halloween (31 October) and 5 days either side, by the viewer's own date: the pumpkin logo (title_custom/logo_halloween.png)</script><div id="ls-bars"><div id="modes" class="ls-bar"><button data-act="multi"></button><button data-act="back"></button><button data-act="srv1"></button><button data-act="srv2"></button><button data-act="srv3"></button><button data-act="map5"></button><button data-act="map6"></button><button data-act="sandbox"></button><button data-act="story"></button></div><div class="ls-bar"><span id="label">Starting...</span><span id="pct">0%</span><i class="ls-spin"></i></div></div></div><div id="ls-log"><div id="data"></div><div id="console"></div></div><div id="bar"><div id="fill"></div></div></div>
+<div id="fps"></div>
+<script type="module">
+// Page of the browser build. The engine runs in a dedicated worker (loader.js: its "main thread", where the static constructors and
+// main() run and which may block); the page only owns the canvas, which is transferred to that worker and on to the GPU worker.
+// Query string: ?args=-flag1,-flag2=value (added to the engine command line), ?shot=N (screenshot of every N-th present to the dev server).
+const q = new URLSearchParams(location.search);
+// Local multiplayer test (PORT_PLAN 5.4.36, 5.4.38): top level, because the loading screen's handler and the engine arguments below both use them
+// ?rtc=1 (also localhost only): peer-to-peer play over WebRTC (wasm/MULTIPLAYER_PLAN.md; net_worker.js is the hub) instead of the relay's virtual LAN; the relay URL is then only the signalling server. It implies ?net=1.
+// LOCAL_PAGE: the dev machine (the test options below only work here); ?public=1 makes a localhost page behave like the public host, to test that path.
+// MP_PAGE: the title screen's Multiplayer item reloaded the page as ?rtc=1&scale=1&mp=1&mode=story (Online needs the Story start mode). It works on every host: on localhost the signalling relay phase3/net_relay.mjs
+// introduces the tabs, on the public host the rendezvous (host/rendezvous.php at /rv, same origin, no WebSocket).
+const LOCAL_PAGE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') && q.get('public') !== '1';
+// The network mode is an engine start-up switch (-nonetwork or -lan, network threads, the net worker), so the engine is started only once the player has chosen (launchEngine below): the loader
+// downloads and compiles game.wasm, the io worker prefetches the boot set and the GPU worker compiles pipelines while the player looks at the title screen, and main() waits (loader.js, run dependency
+// 'choice'). Choosing Multiplayer therefore needs no page reload and no address parameters. ?mp=1 (tests) chooses it at page start.
+let MP_PAGE, NET_RTC, NET_SCALE, NET_ONLINE, NET_TEST, NET_HOOK, NET_WORLD;
+// NET_WORLD (MULTIPLAYER_PLAN steps 4-8): one world without a host, the Multiplayer item's mode. The engine gets -wasmworld (every machine hosts its own view, the hub
+// brings in the players near it as real players); no scale layer, no ghosts and no world assignment (the old design). ?world=0 brings the old design back
+// (comparisons); ?world=1 turns the new one on for the other test pages.
+const setMp = (on) => {
+	MP_PAGE = on;
+	NET_WORLD = (MP_PAGE || q.get('world') === '1') && q.get('world') !== '0';
+	NET_RTC = (LOCAL_PAGE && q.get('rtc') === '1') || MP_PAGE;
+	NET_SCALE = NET_RTC && (q.get('scale') === '1' || MP_PAGE) && !NET_WORLD;		// the scale layer (SCALE_PLAN): ghost block v2 in the engine, ScaleHub in the net worker
+	NET_ONLINE = MP_PAGE ? q.get('online') !== '0' : (LOCAL_PAGE && q.get('online') === '1');		// the game's own GTA Online flow (NET_ONLINE_ARGS below): character select / creator, freemode. The Multiplayer item is this; ?mp=1&online=0 is the old Sandbox Mode with ghosts only (diagnostics)
+	NET_TEST = LOCAL_PAGE && /^(host|join|1)$/.test(q.get('net') || '') ? q.get('net') : (NET_RTC ? '1' : '');
+	NET_HOOK = !!NET_TEST && NET_TEST !== '1' && q.get('nohook') !== '1' && !NET_ONLINE;		// the -wasmnet test hook runs (it posts {netReady}); the game's own Online flow has none
+};
+setMp(q.get('mp') === '1');
+// URL prefix of everything this page loads (loader, workers, engine, shaders, title art): empty on the dev server; on the PHP host (phase3/host/index.php) it puts the page's own
+// text `/b/d045dd0637` through str_replace to `/b/<build id>`, so those files are cached for ever under URLs that change when the build does.
+const BASE = '/b/d045dd0637'.charAt(0) === '_' ? '' : '/b/d045dd0637';
+// The build's time (index.php: its newest file), 0 on a page not served by index.php. The hub tells the other players (net_worker.js spec.bt); one that meets a newer build
+// says so (hubInfo.newer): a player on an old page plays without the fixes the others have, and two versions together misbehave (2026-11-03).
+const BUILD_TIME = Number('1795100697') || (LOCAL_PAGE && +q.get('bt')) || 0;		// ?bt= on a local page: tests
+// The start screen's announcement (top right): message.txt beside index.php on the host, which index.php puts in here as a string when it serves the page, so it costs no request
+// of its own and an edit shows on the next visit. Shown on one line (line breaks in the file become spaces), not wrapped, selectable and copyable. Plain text only. Empty, missing
+// or a page not served by index.php: no announcement.
+{
+	const raw = "There will NEVER be ads on this website \nDonate XMR :) 49anYSwm77Scg8NGkQkPEB17an6ibj8CuhamdBA46hZvFoT2gqF1Rdga2TfcprVhpcCtdkEibVN7iWC3avLpeiGn8Y5Vb9e";
+	const text = raw === '__' + 'MESSAGE__' ? '' : raw.trim().slice(0, 1500);
+	const el = document.getElementById('ls-news');
+	if (text && el) {
+		el.textContent = text.split(String.fromCharCode(10)).map((l) => l.trim()).filter(Boolean).join(' ');
+		el.hidden = false;
+	}
+}
+// ?log=1: the page, the engine threads and the workers send their log lines to the dev server (browser.log, browser_<ip>.log); off by default: the player's upload
+// bandwidth and this thread's time. The loading screen's own log line and the browser console do not depend on it.
+const remoteLog = q.get('log') === '1';
+const postLog = (text) => { if (remoteLog) fetch('/log', { method: 'POST', body: text }).catch(() => {}); };
+// Messages of the engine threads come on MessagePorts and from the loader worker itself (prejs.js postOnce: a BroadcastChannel in a thread that never yields keeps every message), the
+// GPU and io workers' on BroadcastChannels: each listener below is registered for both (onEngine).
+const engineHandlers = {};
+const onEngine = (name, handler) => { (engineHandlers[name] || (engineHandlers[name] = [])).push(handler); new BroadcastChannel(name).onmessage = handler; };
+const fromEngine = (d) => { for (const h of engineHandlers[d.ch] || []) h({ data: d.msg }); };
+// Crash reports from the engine threads (prejs.js __crash, loader.js onAbort/onExit): shown in the bottom-left line with a hint when it looks like memory, and posted to the host's log
+// only with ?log=1 (at most 3 per page, ~10 KB each; they were always posted until 2026-10-06, when 10,000 visitors a day made 5,500 posts and a log file per visitor). A normal exit does not report.
+{
+	let posted = 0;
+	onEngine('game-crash', (ev) => {
+		const m = ev.data;
+		const memory = /memory|OOM|Aborted\(|RangeError|grow/i.test(m.text);
+		const dev = ' deviceMemory ' + (navigator.deviceMemory || '?') + ' GB, cores ' + navigator.hardwareConcurrency;
+		if (remoteLog && posted++ < 3) fetch('/log', { method: 'POST', body: '[page] CRASH (' + m.kind + ', ' + m.thread + ' thread, wasm heap ' + m.heap + ' MB,' + dev + ', ' + location.search + '): ' + m.text + '\n' + m.tail.join('\n') + '\n' }).catch(() => {});
+		const el = document.getElementById('hud');
+		if (el) { el.textContent = 'The game stopped (' + m.kind + '): ' + m.text.split('\n')[0].slice(0, 200) + (memory ? ' - this looks like a lack of memory: close other tabs and reload.' : ' - reload the page.'); el.style.color = '#f96'; }
+	});
+}
+// ---- title screen: the game's own loading screen, LOADINGSCREEN_STARTUP (scaleform_frontend.rpf), redone in HTML ----------------------------------------
+// Ported from its ActionScript (com.rockstargames.gtav.loadingScreens.LOADINGSCREEN_STARTUP, decompiled with JPEXS FFDec) as it plays while the game loads
+// (CTX_GAMELOAD). On the 1280x720 stage (scaled to the window, black outside 16:9): the built-in beach screen and the 17 loadingscreen<N> art screens in one of
+// the movie's six random orders; each is a background panel tilted in 3D (Scaleform's camera: 55 degree field of view around the stage centre, pivot at the
+// layer's top-left; Scaleform's +Z points away from the viewer, CSS's towards it, hence the negated angles) and foreground cut-outs. Every 14 s the next screen
+// slides in (0.85 s, cubic in-out, from alternating sides) and the old one out; a screen's layers tween linearly to their end values over 42 s. The GTA V logo
+// sits bottom left and the instructional button bar bottom right at the boot-time safe zone (7.5 %, CHudTools::GetFakeLoadingScreenSafeZone).
+// Art, logo, spinner and the font ($Font2 = Chalet London 1960) are the game's (phase3/make_title.py, served at /b/d045dd0637/title/).
+let stopTitle = () => {};
+{
+	const stage = document.getElementById('ls-stage'), holder = document.getElementById('ls-screens');
+	const fit = () => {
+		const s = Math.min(innerWidth / 1280, innerHeight / 720);
+		stage.style.transform = 'translate(' + (innerWidth - 1280 * s) / 2 + 'px,' + (innerHeight - 720 * s) / 2 + 'px) scale(' + s + ')';
+	};
+	fit();
+	addEventListener('resize', fit);
+	const L = (tex, w, h, x, y, yr, to) => ({ tex, w, h, x, y, yr, to });
+	const BG = (n, yr, to, x = 98) => L('ls' + n + '_background', 1024, 512, x, 95, yr, to);
+	const FG = (n, name, w, h, x, y, toX, yr = 0) => L('ls' + n + '_' + name, w, h, x, y, yr, { x: toX });
+	const SCREENS = [		// the movie's loadingScreens array: setup (size, position, _yrotation) and tweenTo of every layer, bottom to top
+		[L('beach_bg', 1024, 512, 98, 95, 20, { yr: -6, xr: 5 }), L('beach_fg', 343, 629, 480, 95, 0, { x: 720 })],
+		null,		// loadingscreen_builtin1 (Frisk): its symbols are not in this build's movie, and no order uses it
+		[BG(0, 7, { yr: -7 }), FG(0, 'foreground', 299, 599, 360, 140, 560, 7)],
+		[BG(1, 6, { yr: -12 }), FG(1, 'foreground', 503, 206, 300, 465, 480), FG(1, 'foreground_franklin', 368, 588, 440, 140, 745)],
+		[BG(2, 7, { yr: -5, xr: 5 }), FG(2, 'foreground', 311, 558, 745, 200, 450), FG(2, 'foreground_chop', 320, 512, 640, 260, 310)],
+		[BG(3, 12, { yr: -4 }, 110), FG(3, 'foreground', 412, 609, 440, 120, 730)],		// its foreground_car is an "isInFla" layer missing from the movie: the game shows no car
+		[BG(4, 7, { yr: -4, xr: 5 }), FG(4, 'foreground', 251, 643, 400, 85, 250)],
+		[BG(5, 7, { yr: -6 }), FG(5, 'foreground', 389, 640, 450, 95, 700)],
+		[BG(6, 7, { yr: 0, xr: 5 }), FG(6, 'foreground', 367, 603, 410, 115, 800)],
+		[BG(7, 6, { yr: -6, xr: 5 }), FG(7, 'foreground', 311, 625, 860, 95, 520)],
+		[BG(8, 7, { yr: -5, xr: 5 }), FG(8, 'foreground', 492, 497, 400, 190, 660)],
+		[BG(9, 7, { yr: -3, xr: 5 }), FG(9, 'foreground', 331, 675, 220, 50, 140)],
+		[BG(10, 6, { yr: -5, xr: 5 }), FG(10, 'foreground', 352, 682, 545, 65, 485)],
+		[BG(11, 7, { yr: -3, xr: 5 }), FG(11, 'foreground', 344, 669, 309, 51, 424)],
+		[BG(12, 6, { yr: -4 }), FG(12, 'foreground_michael', 462, 677, 345, 42, 220)],
+		[BG(13, 5, { yr: -6, xr: 5 }), FG(13, 'foreground', 399, 681, 430, 39, 250)],
+		[BG(14, 6, { yr: -2, xr: 5 }), FG(14, 'foreground', 392, 631, 650, 95, 850)],
+		[BG(15, 6, { yr: -3, xr: 5 }), FG(15, 'foreground', 385, 642, 404, 78, 261)],
+		[BG(16, 6, { yr: -3, xr: 5 }), FG(16, 'foreground', 300, 600, 300, 150, 400)],
+	];
+	const ORDERS = [[0, 16, 18, 3, 12, 2, 17, 10, 9, 8, 15, 6, 11, 14, 4, 7, 13], [0, 4, 6, 17, 11, 16, 18, 7, 9, 15, 3, 14, 10, 13, 2, 8, 12],
+		[0, 7, 16, 14, 13, 3, 10, 2, 15, 18, 8, 9, 4, 17, 12, 6, 11], [0, 8, 18, 9, 13, 4, 11, 14, 7, 17, 6, 12, 3, 16, 2, 15, 10],
+		[0, 11, 12, 7, 18, 14, 9, 13, 4, 2, 15, 11, 8, 16, 6, 3, 17], [0, 10, 16, 2, 13, 17, 8, 9, 18, 3, 12, 6, 7, 4, 14, 15, 10]];
+	const order = ORDERS[Math.floor(Math.random() * ORDERS.length)];
+	const cubicInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(2 - 2 * t, 3) / 2);		// TweenStar Cubic.easeInOut
+	// the screen's horizontal position; its layers' cameras stay at the stage centre (Scaleform's camera does not move with the clip)
+	const slide = (s, x) => {
+		s.el.style.transform = 'translateX(' + x + 'px)';
+		for (const c of s.cams) c.style.perspectiveOrigin = (640 - x) + 'px 360px';
+	};
+	const place = (l, x, yr, xr) => { l.el.style.transform = 'translate3d(' + x + 'px,' + l.y + 'px,0) rotateY(' + -yr + 'deg) rotateX(' + -xr + 'deg)'; };
+	// a screen's images, decoded before it may show (the movie waits for its texture dictionary the same way)
+	const prepare = (i) => {
+		const layers = SCREENS[order[i]].map((d) => ({ ...d, img: Object.assign(new Image(), { src: '/b/d045dd0637/title/art/' + d.tex + '.webp' }) }));
+		return Promise.all(layers.map((l) => l.img.decode().catch(() => {}))).then(() => layers);
+	};
+	let active = null, leaving = null, index = 0, alt = -1, timer = 0, raf = 0, stopped = false;
+	const show = (defs) => {
+		const now = performance.now();
+		alt = alt <= 0 ? 1 : -1;		// updateScreenIndex: the side alternates
+		const el = document.createElement('div');
+		el.className = 'ls-screen';
+		const cams = [];
+		const s = { el, slideFrom: alt * 1280, start: now, settled: 0, cams, layers: defs.map((d) => {
+			const cam = document.createElement('div'), e = document.createElement('div');
+			cam.className = 'ls-cam';
+			e.className = 'ls-layer';
+			e.style.width = d.w + 'px'; e.style.height = d.h + 'px';
+			e.style.backgroundImage = 'url(' + d.img.src + ')';
+			cam.appendChild(e);
+			el.appendChild(cam);
+			cams.push(cam);
+			return { el: e, y: d.y, x0: d.x, yr0: d.yr, xr0: 0, x1: d.to.x ?? d.x, yr1: d.to.yr ?? d.yr, xr1: d.to.xr ?? 0 };
+		}) };
+		for (const l of s.layers) place(l, l.x0, l.yr0, l.xr0);
+		slide(s, s.slideFrom);
+		holder.appendChild(el);		// above the screen that leaves
+		if (leaving) leaving.el.remove();
+		leaving = active;
+		if (leaving) { leaving.slideFrom = 0; leaving.slideTo = -alt * 1280; leaving.start = now; }
+		active = s;
+		s.slideTo = 0;
+	};
+	const tick = (now) => {
+		for (const s of [leaving, active]) {
+			if (!s) continue;
+			const p = Math.min(1, (now - s.start) / 850);
+			if (p < 1 || !s.slid) { slide(s, s.slideFrom + (s.slideTo - s.slideFrom) * cubicInOut(p)); s.slid = p === 1; }
+			if (s === active && p === 1 && !s.settled) s.settled = now;		// loadscreenIsSettled: the layers start their 42 s tweens
+			if (s.settled) {
+				const q = Math.min(1, (now - s.settled) / 42000);
+				for (const l of s.layers) place(l, l.x0 + (l.x1 - l.x0) * q, l.yr0 + (l.yr1 - l.yr0) * q, l.xr0 + (l.xr1 - l.xr0) * q);
+			}
+			if (s === leaving && p === 1) { s.el.remove(); leaving = null; }
+		}
+		if (!stopped) raf = requestAnimationFrame(tick);
+	};
+	let next = prepare(0);
+	const cycle = () => next.then((defs) => {
+		if (stopped) return;
+		show(defs);
+		index = (index + 1) % order.length;
+		next = prepare(index);
+		timer = setTimeout(cycle, 14000);		// timerDuration
+	});
+	timer = setTimeout(cycle, 500);
+	raf = requestAnimationFrame(tick);
+	stopTitle = () => { stopped = true; clearTimeout(timer); cancelAnimationFrame(raf); };
+}
+// ---- start choice: Story Mode / Sandbox Mode, and Sandbox Mode's map, in the title screen's button bar ---------------------------------------------------------
+// The game's own loading-time choice (CLoadingScreens::RefreshButtonLayout: "Loading Story Mode" with a spinner, "Online" as a button) with Sandbox Mode in the
+// Online slot. Buttons are laid out like updateButtonLayout: the spinner item rightmost; on PC the icons are key caps (a click works too). Enter = Story Mode;
+// Space = Sandbox Mode, which asks for the map: 5 = the GTA V map, 6 = "GTA VI Map" (the env_test level), Backspace = back. The choice goes into the engine's
+// input block (WasmInputBlock.startMode, wasm/platform/input/browser_input_wasm.cpp): 1 = Story Mode (the release startup: a new game from the Prologue),
+// 2 = Sandbox Mode on the GTA V map (free roam at a random spot with every weapon), 3 = Sandbox Mode on env_test. It can change until the engine takes it
+// (where it reads -level, about 62 % into the load; it waits there if nothing was chosen, and the page then pulses the key caps); after that only the chosen
+// item stays. ?mode=story|sandbox chooses up front (with &map=env_test for Sandbox Mode on env_test).
+// Multiplayer (the first item of the bar): the network layer is chosen when the page starts (engine switches, the WebRTC links, the net worker), not while it loads, so the item
+// reloads this page as ?rtc=1&scale=1&mp=1&mode=story (MP_PAGE, above): the game's own GTA Online flow (-wasmonline: character select and creator, then freemode, where the game does not pause) with the
+// peer-to-peer layer of MULTIPLAYER_PLAN.md / SCALE_PLAN.md carrying the other players.
+// On that page the bar only shows the item, loading.
+let startMode = MP_PAGE ? 1 : q.get('mode') === 'story' ? 1 : q.get('mode') === 'sandbox' ? (q.get('map') === 'env_test' ? 3 : 2) : 0;
+let startModeWord = null, startCommitted = false, pickingMap = false, pickingServer = false, waitingChoice = false;
+// SERVERS: Multiplayer asks which of SERVERS separate worlds to join (Server 1-3, keys 1-3; ?server=N with ?mp=1). Each is its own mesh with its own entry points on the rendezvous
+// (&s=N, rendezvous.php) and its own player count. The Multiplayer item shows the total, each server item its own: the rendezvous's a=online (per server, the most players any of
+// its greeters knows of), asked at page start and every 30 s until the loading screen goes; once in, the joined server's count is the hub's own (hubInfo.online). Only where there
+// is a rendezvous (the public host, or ?rendezvous= on the dev machine); null = unknown, not shown.
+const SERVERS = 3;
+let mpServer = Math.max(1, Math.min(SERVERS, +q.get('server') || 1));
+const onlineBy = Array(SERVERS).fill(null);
+const onlineText = (n) => n ? n.toLocaleString('en-US') + ' online' : 'nobody online';
+const RV_URL = q.get('rendezvous') || (LOCAL_PAGE ? '' : location.origin + '/rv');
+if (RV_URL) {
+	// the counts as a static file first (rendezvous.php rv_publish_online: Apache sends it, no PHP process), a=online when it is missing or over a minute old (nobody synced)
+	const staticOnline = RV_URL === location.origin + '/rv' ? location.origin + '/rv_online.json' : '';
+	// first the counts Cloudflare keeps for a second (/data/rv/online.json, host/index.php: rv_online.json is never cached there, and with ~1,900 pages asking it was a third
+	// of the host's requests on 2026-11-18); a host without it (404) is asked as before
+	let edgeOnline = staticOnline ? location.origin + '/data/rv/online.json' : '';
+	const fetchOnline = async () => {
+		if (edgeOnline) {
+			try {
+				const r = await fetch(edgeOnline, { cache: 'no-store' });
+				if (r.ok) { const j = await r.json(); if (j && typeof j.online === 'number') return j; }
+				else if (r.status === 404) edgeOnline = '';
+			} catch (e) { /* the static file below */ }
+		}
+		if (staticOnline) {
+			try {
+				const r = await fetch(staticOnline, { cache: 'no-store' });
+				if (r.ok) { const j = await r.json(), now = Date.parse(r.headers.get('Date') || '') || Date.now(); if (j && typeof j.t === 'number' && now - j.t < 60000) return j; }
+			} catch (e) { /* the rendezvous below */ }
+		}
+		const r = await fetch(RV_URL.replace(/\/+$/, '') + '?a=online');
+		return r.ok ? r.json() : null;
+	};
+	const askOnline = () => {
+		if (!document.getElementById('loading')) { clearInterval(onlineTimer); return; }
+		fetchOnline().then((j) => {
+			if (!j || typeof j.online !== 'number') return;
+			const per = Array.isArray(j.servers) ? j.servers.map((e) => e && e.online) : [j.online];		// a rendezvous from before the servers: server 1 only
+			const inWorld = window.__rtc && window.__rtc.join && window.__rtc.join.state === 'joined';
+			for (let i = 0; i < SERVERS; i++) if (typeof per[i] === 'number' && !(inWorld && MP_PAGE && i === mpServer - 1)) onlineBy[i] = per[i];
+			showModes();
+		}).catch(() => {});
+	};
+	const onlineTimer = setInterval(askOnline, 30000);
+	setTimeout(askOnline, 0);		// after the bar exists (showModes below)
+}
+let launchEngine = null, launched = false;		// launchEngine: set where the engine worker exists; launched: the engine has been told to start (the choice is final)		// waitingChoice: the engine waits for the choice
+const ACTS = {		// button: text, key cap, key codes
+	multi: ['Multiplayer', 'M', ['KeyM']],
+	back: ['Back', 'Backspace', ['Backspace']],
+	srv1: ['Server 1', '1', ['Digit1', 'Numpad1']],
+	srv2: ['Server 2', '2', ['Digit2', 'Numpad2']],
+	srv3: ['Server 3', '3', ['Digit3', 'Numpad3']],
+	map5: ['GTA V Map', '5', ['Digit5', 'Numpad5']],
+	map6: ['GTA VI Map', '6', ['Digit6', 'Numpad6']],
+	sandbox: ['Sandbox Mode', 'Space', ['Space']],
+	story: ['Story Mode', 'Enter', ['Enter', 'NumpadEnter']],
+};
+const LOADING = { 1: 'Loading Story Mode', 2: 'Loading Sandbox Mode: GTA V Map', 3: 'Loading Sandbox Mode: GTA VI Map' };
+const modesEl = document.getElementById('modes'), modeButtons = [...modesEl.querySelectorAll('button')];
+const isMode = (act) => act === 'story' || act === 'sandbox' || act === 'multi';
+const isServer = (act) => /^srv\d$/.test(act);
+const shownIn = (act) => pickingServer ? isServer(act) || act === 'back' : pickingMap ? act === 'map5' || act === 'map6' || act === 'back' : isMode(act);
+const showModes = () => {
+	for (const b of modeButtons) {
+		const act = b.dataset.act, loading = MP_PAGE ? act === 'multi' : !pickingMap && (act === 'story' ? startMode === 1 : act === 'sandbox' && startMode >= 2);
+		const text = document.createElement('span'), icon = document.createElement(loading ? 'i' : 'span');
+		text.textContent = loading ? (MP_PAGE ? 'Loading Multiplayer: Server ' + mpServer : LOADING[startMode]) : ACTS[act][0];
+		icon.className = loading ? 'ls-spin' : 'ls-key';
+		icon.textContent = loading ? '' : ACTS[act][1];
+		b.replaceChildren(text, icon);
+		const count = act === 'multi' ? (MP_PAGE ? onlineBy[mpServer - 1] : onlineBy.some((n) => n !== null) ? onlineBy.reduce((a, n) => a + (n || 0), 0) : null) : isServer(act) ? onlineBy[+act.slice(3) - 1] : null;
+		if (count !== null) { const n = document.createElement('span'); n.className = 'ls-online'; n.textContent = onlineText(count); text.after(n); }
+		b.style.order = loading ? 1 : 0;
+		b.disabled = startCommitted || launched;
+		b.hidden = startCommitted || launched ? !loading : !shownIn(act);		// the modes, or the map / server choice with Back
+		b.classList.toggle('chosen', loading);
+	}
+	if (startMode) modesEl.classList.remove('ask');
+	if (waitingChoice && !startMode) document.getElementById('label').textContent = pickingMap ? 'Choose a map to continue' : pickingServer ? 'Choose a server to continue' : 'Choose Multiplayer, Story Mode or Sandbox Mode to continue';
+};
+const choose = (m) => {
+	pickingMap = pickingServer = false;
+	if (m !== startMode) {
+		startMode = m;
+		if (startModeWord) Atomics.store(startModeWord, 0, m);
+		postLog('[page] start mode: ' + ({ 1: 'story', 2: 'sandbox', 3: 'sandbox on env_test' })[m]);
+	}
+	showModes();
+	if (launchEngine) launchEngine();
+};
+const act = (a) => {
+	if (startCommitted || launched) return;
+	if (a === 'multi') { pickingServer = true; pickingMap = false; showModes(); }		// which server first
+	else if (isServer(a)) {
+		mpServer = +a.slice(3);
+		pickingServer = false;
+		postLog('[page] multiplayer server ' + mpServer);
+		setMp(true);
+		startMode = 1;		// Online needs the Story start mode
+		showModes();
+		if (launchEngine) launchEngine();
+	}
+	else if (a === 'story') choose(1);
+	else if (a === 'map5') choose(2);
+	else if (a === 'map6') choose(3);
+	else { pickingMap = a === 'sandbox'; pickingServer = false; showModes(); }		// Sandbox Mode (or its loading item: change the map) asks for the map; Back closes that
+};
+modesEl.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.hidden) act(b.dataset.act); });
+addEventListener('keydown', (e) => {
+	if (startCommitted || launched || e.ctrlKey || e.altKey || e.metaKey || !document.getElementById('loading')) return;
+	const b = modeButtons.find((x) => !x.hidden && ACTS[x.dataset.act][2].includes(e.code));
+	if (!b) return;
+	act(b.dataset.act);
+	e.preventDefault(); e.stopImmediatePropagation();
+}, { capture: true });
+showModes();
+// ---- loading progress: the engine (prejs.js, loader.js) and the GPU worker publish {pct, label} on a BroadcastChannel ------------------
+// Joining the multiplayer server with a rendezvous (joinWait). The hub reports once a second (hubInfo.join, net_worker.js): 'joined' (a link to a player online), 'first' (this player is
+// the entry point and nobody else is online), 'joining' with the failed tries so far, 'failed' after the hub's JOIN_TRIES. The hub joins while the game loads, so it is usually in before the
+// world is; it no longer holds the loading screen (2026-11-03: a player whose entry points failed sat at 99 % for 12 s per attempt with the world ready). The player goes in, the hub keeps
+// joining, and the line at the bottom left says which attempt it is until a link is up; the other players appear then, as they do for the first player online.
+let joinWait = false, onJoinInfo = () => {};
+{
+	const loading = document.getElementById('loading'), fill = document.getElementById('fill'), label = document.getElementById('label'), pct = document.getElementById('pct');
+	let target = 0, shown = 0, ready = false, dirty = false, loadingGone = false, worldSeen = false, netSeen = false;
+	let dataBytes = 0, worldBase = -1;
+	const samples = [];
+	let lastLine = '';
+	const consoleEl = document.getElementById('console');
+	let lastActivity = performance.now(), stallLogged = 0, lastLabel = '';
+	let joinOk = false, joinInfo = null, hudTip = '', joinLine = '', updateLine = '', gpuHint = '';
+	// The bottom-left line after loading: the tip (15 s) and, while no link is up yet, the join's status. A message a crash or a lost GPU put there (they colour it) is left alone.
+	const renderHud = () => { if (!hud.style.color) hud.textContent = [updateLine, hudTip, joinLine].filter(Boolean).join('\n'); };
+	const updateJoinLine = () => {
+		if (!ready || !joinWait) return;
+		const j = joinInfo || { state: 'joining', fails: 0, max: 5, error: '' };
+		joinLine = joinOk ? '' : j.state === 'failed' ? 'Could not reach the other players online after ' + j.max + ' attempts (' + j.error + '). Still trying; you can play meanwhile.'
+			: 'Connecting to the other players online' + (j.fails > 0 ? ' (attempt ' + Math.min(j.fails + 1, j.max) + ' of ' + j.max + ')' : '') + '...';
+		renderHud();
+	};
+	const checkReady = () => {
+		if (ready || !worldSeen || !(netSeen || !NET_HOOK)) return;
+		ready = true;
+		label.style.color = '';
+		hudTip = 'click the game to capture the mouse (Esc releases it, Shift+P switches keyboard mode, = shows FPS)' + (joinInfo && joinInfo.state === 'first' ? '\nYou are the first player online: others who join will appear near you.' : '') + (gpuHint ? '\n' + gpuHint : '');
+		updateJoinLine();
+		renderHud();
+		setTimeout(() => { hudTip = ''; renderHud(); }, gpuHint ? 25000 : 15000);
+	};
+	let joinLogged = '';
+	onJoinInfo = (info) => {
+		if (!info || !info.join) return;
+		joinInfo = info.join;
+		if (typeof info.online === 'number' && (joinInfo.state === 'joined' || joinInfo.state === 'first') && info.online !== onlineBy[mpServer - 1]) { onlineBy[mpServer - 1] = info.online; showModes(); }		// in the world: the hub's own count
+		const key = joinInfo.state + ' ' + joinInfo.fails;
+		if (key !== joinLogged) { joinLogged = key; postLog('[page] join: ' + joinInfo.state + (joinInfo.fails ? ', ' + joinInfo.fails + ' failed (' + joinInfo.error + ')' : '')); }
+		joinOk = joinInfo.state === 'joined' || joinInfo.state === 'first' || joinInfo.state === 'none';
+		if (info.newer && !updateLine) { updateLine = 'A newer version of the game is out: press F5 to reload and keep playing with everyone (your progress is saved).'; postLog('[page] a newer build is out'); renderHud(); }
+		if (!ready) checkReady();
+		else updateJoinLine();
+	};
+	onEngine('game-progress', (ev) => {
+		const m = ev.data;
+		lastActivity = performance.now();
+		if (m.dl) {		// bytes of game data fetched by an engine thread since its last report
+			dataBytes += m.dl;
+			samples.push([performance.now(), m.dl]);
+			return;
+		}
+		if (m.lines) {
+			if (loadingGone || !m.lines.length) return;		// the log line above the progress bar is gone: no DOM work for it during play
+			lastLine = m.lines[m.lines.length - 1];
+			dirty = true;
+			return;
+		}
+		if (m.gpuAdapter) {		// the GPU worker's adapter (wgpu_worker.js): Intel graphics other than a discrete Arc card (architecture xe-hpg / xe2-hpg) get a hint in the tip after loading
+			const a = m.gpuAdapter;
+			if (/intel/i.test(a.vendor) && !/hpg/i.test(a.architecture)) {
+				gpuHint = 'The game is running on Intel graphics. If this PC also has an NVIDIA or AMD graphics card, set your browser to "High performance" in Windows Settings > System > Display > Graphics, then restart the browser.';
+				postLog('[page] integrated graphics hint shown (' + a.vendor + ', ' + a.architecture + ')');
+				if (ready && hudTip) { hudTip += '\n' + gpuHint; renderHud(); }
+			}
+			return;
+		}
+		if (m.gpuLost) {		// Windows reset the graphics driver (a GPU job ran too long: DXGI_ERROR_DEVICE_HUNG) or the browser dropped the GPU: nothing draws any more while the game
+			// runs on blind (the picture froze with sound and network going, 2026-11-10). Reload: the log gets 3 s to reach the host first; once in 3 minutes, then ask.
+			let last = 0;
+			try { last = +sessionStorage.getItem('gpuLostReloadAt') || 0; } catch (e) { /* no storage */ }
+			hud.style.color = '#f66';
+			if (Date.now() - last < 180000) { hud.textContent = 'The graphics driver was reset again (' + m.gpuLost + '). Close other games or video tabs, make sure the browser uses your main graphics card, then reload the page.'; return; }
+			try { sessionStorage.setItem('gpuLostReloadAt', String(Date.now())); } catch (e) { /* ignore */ }
+			hud.textContent = 'The graphics driver was reset (' + m.gpuLost + '): reloading the game...';
+			postLog('[page] GPU device lost (' + m.gpuLost + '): reloading in 3 s');
+			setTimeout(() => location.reload(), 3000);
+			return;
+		}
+		if (m.error) { label.textContent = m.error; label.style.color = '#e66'; return; }
+		if (m.pct > target) { target = m.pct; if (m.label) { lastLabel = m.label; if (!waitingChoice) label.textContent = m.label; } if (m.pct >= 72 && worldBase < 0) worldBase = dataBytes; }
+		if (m.choice && !startMode) { waitingChoice = true; modesEl.classList.add('ask'); showModes(); }		// the engine waits for the choice: showModes asks for it in the label
+		if (m.commit) { startCommitted = true; pickingMap = pickingServer = false; if (m.mode) startMode = m.mode; showModes(); }		// the engine took the choice
+		if (m.compiling !== undefined && !waitingChoice) { label.textContent = lastLabel = 'Preparing shaders'; target = Math.max(target, 99); }		// the world is up; the GPU worker holds it until its pipelines are compiled
+		// On a ?net= test page the loading screen stays until the engine says the multiplayer session is joined and in sync ({netReady}), whatever the world's own readiness: the game does not
+		// drop the player into the world until the session is up. {netLabel} is the engine's progress text for that wait.
+		if (m.netLabel && !ready) { label.textContent = lastLabel = m.netLabel; target = Math.max(target, 99); }
+		if (m.netReady) netSeen = true;
+		if (m.world) worldSeen = true;
+		checkReady();
+	});
+	// Between reports the bar creeps forward (at most 6 points past the last report) so a long stage does not look frozen.
+	const dataEl = document.getElementById('data');
+	const WORLD_BYTES = 1.2e9;		// game data the world needs after the scripts start (measured: about 1.2-1.4 GB the first time)
+	// Stall watchdog: nothing (no log line, no data, no progress) from any engine thread for 30 s while loading. A tab that ran out of memory dies ("Aw, Snap!") and cannot say so,
+	// but one that is thrashing or deadlocked can: show it, and leave a timestamped line in the server log for diagnosis.
+	setInterval(() => {
+		if (ready) return;
+		if (waitingChoice) { if (!startMode) { lastActivity = performance.now(); return; } waitingChoice = false; label.textContent = lastLabel; }
+		if (worldSeen && joinWait && !joinOk) return;		// the world is up, the join step has its own text (onJoinInfo)
+		const quiet = (performance.now() - lastActivity) / 1000;
+		if (quiet > 30) {
+			label.textContent = 'No progress for ' + (quiet | 0) + ' s' + (lastLabel ? ' (last step: ' + lastLabel + ')' : '') + ': the device may be out of memory. Close other tabs, or reload.';
+			label.style.color = '#e96';
+			if (quiet - stallLogged > 30) { stallLogged = quiet; postLog('[page] STALL: no progress for ' + (quiet | 0) + ' s, last step "' + lastLabel + '", shown ' + shown.toFixed(0) + '%'); }
+		} else if (stallLogged) { stallLogged = 0; label.style.color = ''; }
+	}, 2000);
+	const progressTimer = setInterval(() => {
+		const now = performance.now();
+		while (samples.length && now - samples[0][0] > 3000) samples.shift();
+		const speed = samples.reduce((a, x) => a + x[1], 0) / 3;
+		if (dataBytes) dataEl.textContent = 'Game data: ' + (dataBytes / 1048576 | 0) + ' MB' + (speed > 1e4 ? ' (' + (speed / 1048576).toFixed(1) + ' MB/s)' : '');
+		// from the scripts stage on, progress also follows the data that arrives (72 -> 98 %)
+		if (worldBase >= 0 && !ready) target = Math.max(target, 72 + 26 * Math.min(1, (dataBytes - worldBase) / WORLD_BYTES));
+		const cap = ready ? 100 : Math.min(99, target + 6);
+		const goal = ready ? 100 : (shown < target ? target : cap);
+		shown += (goal - shown) * (goal === target || ready ? 0.12 : 0.004);
+		if (dirty) {		// the newest line only
+			dirty = false;
+			consoleEl.textContent = lastLine;
+		}
+		fill.style.width = shown.toFixed(1) + '%';
+		pct.textContent = Math.round(shown) + '%';
+		if (ready && shown > 99.5) { loading.classList.add('done'); setTimeout(() => { loading.remove(); stopTitle(); }, 1000); loadingGone = true; clearInterval(progressTimer); }		// once: the page does no loading-screen work during play
+	}, 50);
+}
+const hud = document.getElementById('hud');
+// FPS counter, top left: off by default, the = key toggles it. The GPU worker counts presented frames and posts the rate twice a second on 'game-fps'. The key does not reach
+// the game (capture phase on window, before the input handlers; this build has debug key bindings).
+{
+	const el = document.getElementById('fps');
+	let on = false;
+	new BroadcastChannel('game-fps').onmessage = (ev) => { if (on) el.textContent = Math.round(ev.data.fps) + ' FPS'; };
+	const isToggle = (e) => e.code === 'Equal' && !e.ctrlKey && !e.altKey && !e.metaKey;
+	addEventListener('keydown', (e) => {
+		if (!isToggle(e)) return;
+		e.stopImmediatePropagation(); e.preventDefault();
+		if (e.repeat) return;
+		on = !on;
+		el.style.display = on ? 'block' : 'none';
+		if (on) el.textContent = '-- FPS';
+	}, { capture: true });
+	addEventListener('keyup', (e) => { if (isToggle(e)) { e.stopImmediatePropagation(); e.preventDefault(); } }, { capture: true });
+}
+const canvas = document.getElementById('canvas');
+// With ?log=1, log lines of the engine threads and the GPU worker arrive here (prejs.js / wgpu_worker.js post them on 'game-log' without blocking) and go to the dev server
+// in order, one POST at a time with whatever queued up meanwhile.
+if (remoteLog) {
+	const queue = [];
+	let sending = false;
+	const pump = async () => {
+		if (sending || !queue.length) return;
+		sending = true;
+		// at most ~1 MB per POST: the host drops a body over PHP's post_max_size (8 MB) whole, which lost a casino test session's log (2026-11-10)
+		let n = 0, bytes = 0;
+		while (n < queue.length && (n === 0 || bytes + queue[n].length < 1000000)) bytes += queue[n++].length + 1;
+		const body = queue.splice(0, n).join('\n');
+		try { await fetch('/log', { method: 'POST', body, keepalive: body.length < 60000 }); } catch (e) { /* server gone */ }
+		sending = false;
+		pump();
+	};
+	onEngine('game-log', (ev) => { queue.push(ev.data); if (queue.length > 20000) queue.splice(0, queue.length - 20000); pump(); });
+}
+// Release the io worker's exclusive storage handles as soon as this page goes away (a quick reload would otherwise find them locked and run without the store).
+addEventListener('pagehide', () => { try { new BroadcastChannel('game-io').postMessage('close'); } catch (e) {} });
+// Earlier versions cached the game data with a service worker (sw.js) and the Cache API: remove both, the io worker keeps its own store (io_worker.js).
+async function dropOldCache() {
+	try {
+		if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+		if (window.caches) for (const k of await caches.keys()) if (k.startsWith('gamedata')) await caches.delete(k);
+	} catch (e) { console.warn('could not remove the old cache: ' + e); }
+}
+let lowMemory = false;		// set below (module scope: the ?mem readout further down also needs it)
+let startSize = [1280, 720], wantSize = null;		// set below (module scope: installInput uses them)
+if (!crossOriginIsolated) { document.getElementById('label').textContent = 'not cross-origin isolated: open the page over https (or localhost); the server sends COOP/COEP'; document.getElementById('label').style.color = '#e66'; }
+else {
+	const offscreen = canvas.transferControlToOffscreen();
+	await dropOldCache();
+	// Low-memory profile (?low=1 forces it, ?low=0 forbids it; default: navigator.deviceMemory <= 4, which browsers report as 4 for 4 GB and less):
+	// every engine thread is a Web Worker of ~20 MB and the engine sizes its thread count from the core count, so pretend to have 2 cores (54 threads
+	// instead of 80-116); quarter the texture memory (texture quality 0 = top mip skipped on the GPU), no network stack, and the minimum ped/vehicle
+	// variety, city density, LOD and quality settings: measured in a Node run at the world, GPU memory 1.16 GB -> 0.5 GB and streamed assets 1.38 GB -> 0.95 GB.
+	// Shadows off (-shadowQuality=-1, engine level 0 below the menu's lowest; SettingsManager.cpp, wasm): the cascade shadow pass was a third of all draws (Node, 1366x600:
+	// 600-900 of 1,300-2,900 per frame), and a 4-core Chromebook spent ~110 us per draw. ?shadows=1 keeps them at the lowest level.
+	const lowParam = q.get('low');
+	lowMemory = lowParam === '1' || (lowParam !== '0' && navigator.deviceMemory && navigator.deviceMemory <= 4);
+	// Also off (2026-10-26): SSAO, post effects, FXAA, tessellation, reflection MSAA and anisotropic filtering, simple water, the lowest LOD ceiling: each drops render targets or work.
+	const LOW_ARGS = ['-textureQuality=0', '-pedVariety=0', '-vehicleVariety=0', '-shadowQuality=' + (q.get('shadows') === '1' ? 0 : -1), '-reflectionQuality=0', '-particleQuality=0',
+		'-grassQuality=0', '-cityDensity=0', '-lodScale=0', '-pedLodBias=0', '-vehicleLodBias=0', '-SSAO=0', '-postFX=0', '-fxaa=0', '-tessellation=0', '-reflectionMSAA=0',
+		'-anisotropicQualityLevel=0', '-waterQuality=0', '-MaxLODScale=0'];		// not -shaderQuality=0: its shader set lacks variables the game needs (Fatal Error: grmShaderGroupVar 'DistortionParams', a hang at the first frame)
+	// Every other device: FXAA on (2026-11-19, user: "fix how the lights flicker at night ... when ur moving or moving mouse"). The game's own defaults leave it off here, and with no
+	// anti-aliasing the lit windows and lamps of distant buildings, a pixel or less wide, blinked on and off from frame to frame whenever the camera moved: a local Online run at
+	// night (Legion Square, 90 consecutive frames while walking) had 36.5 pixels a frame that lit up or went dark for exactly one frame, 0.5 with -fxaa=1.
+	const NORMAL_ARGS = ['-fxaa=1'];
+	// A device reporting 4 GB (the most a low profile can report) uses its real cores, up to 4: on the user's 4-core, 4 GB Chromebook 2 cores put the network, audio
+	// and job threads on top of each other (1.9-3.8 fps in the world, the mixer silent ~45 % of the time); ?cores=4 gave 4.9-7.3 fps with more draws, the network
+	// share of the main thread 17 % -> 6 %, and no memory trouble (2026-11-11). Devices reporting less keep 2 cores.
+	const cores = +(q.get('cores') || 0) || (lowMemory ? (navigator.deviceMemory >= 4 ? Math.max(2, Math.min(navigator.hardwareConcurrency || 2, 4)) : 2) : navigator.hardwareConcurrency);
+	if (lowMemory) hud.textContent = 'Low-memory device (' + (navigator.deviceMemory || '?') + ' GB reported): close other tabs. If the tab shows "Aw, Snap!" or SIGILL it ran out of memory.';
+postLog('[page env] ' + JSON.stringify({ deviceMemory: navigator.deviceMemory, cores: navigator.hardwareConcurrency, usingCores: cores, low: lowMemory, isolated: crossOriginIsolated, ua: navigator.userAgent.slice(0, 120), screen: screen.width + 'x' + screen.height + '@' + devicePixelRatio }));
+// Back buffer = the browser window in device pixels (native resolution), following window resizes live (see installInput). ?scale=0.75 renders at 75 % (faster), ?fixed=1 keeps the
+// start-up size whatever the window does, ?res=1920x1080 forces a size. Even numbers, at most 3840x2160 (1280x720 in the low-memory profile, scaled up to the window: screen-sized render
+// targets dominate GPU memory, and a Chromebook's GPU memory is its RAM).
+wantSize = () => {
+	const forced = /^(\d+)x(\d+)$/.exec(q.get('res') || '');
+	if (forced) return [+forced[1], +forced[2]];
+	const sc = Math.max(0.25, Math.min(2, +(q.get('scale') || 1)));
+	let w = innerWidth * devicePixelRatio * sc, h = innerHeight * devicePixelRatio * sc;
+	h = Math.min(h, w * 9 / 16);		// narrower than 16:9: a 16:9 picture (the menus, name tags and HUD are laid out for it; see fitCanvas)
+	const cap = lowMemory ? [1280, 720] : [3840, 2160], k = Math.min(1, cap[0] / w, cap[1] / h);
+	w *= k; h *= k;
+	return [Math.max(320, Math.round(w / 2) * 2), Math.max(240, Math.round(h / 2) * 2)];
+};
+startSize = wantSize();
+// A window narrower than 16:9 shows the 16:9 picture centred with black bars. The engine's UI follows the back buffer's ratio, and its pause-menu padding table (CPauseMenu, PauseMenu.cpp ~14300)
+// only knows a few standard ratios: in between, the menu (the Online character creator is one) was pushed past the left edge of the screen. Mouse input maps through the canvas rectangle (installInput).
+const fitCanvas = ([bw, bh]) => {
+	let cw = innerWidth, ch = innerWidth * bh / bw;
+	if (ch > innerHeight) { ch = innerHeight; cw = ch * bw / bh; }
+	canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+	canvas.style.left = ((innerWidth - cw) / 2) + 'px'; canvas.style.top = ((innerHeight - ch) / 2) + 'px';
+};
+fitCanvas(startSize);
+addEventListener('resize', () => fitCanvas(q.get('fixed') ? startSize : wantSize()));
+// Script and replay channels: ~87 % of all log lines in play (the scripts print leaderboard and status lines every few frames). Below warning they are off: formatting, the
+// log transport and the dev server's log file cost the main thread for nothing. ?verbose=1 keeps everything.
+const LOG_ARGS = q.get('verbose') ? [] : ['-Script_all=warning', '-replay_all=warning'];
+// -fastscriptcore: the script interpreter's production core (scrThread::Run static). Without it this build runs the debugging core, which looks up two breakpoint tables
+// for every script instruction (scrThread::Run was ~8 % of the main thread).
+const ENGINE_ARGS = ['-fastscriptcore'];
+// Local multiplayer test (PORT_PLAN 5.4.36): ?net=host|join (or =1 for just the link) on a localhost page, never on the public host: the engine runs its LAN mode over the virtual LAN of
+// phase3/net_relay.mjs (?relay=ws://127.0.0.1:8787/ by default), with the network threads running and no -nonetwork. -wasmnet=host|join makes game/debug/Debug.cpp host or join a session.
+// ?online=1 (with ?net=, localhost only): the game's own GTA Online flow instead of the test hook (PORT_PLAN 5.4.38): straight into multiplayer like the landing page's Online, the
+// cloud / policy / privilege / pack-order / shop-server gates answered the way the engine's own switches allow
+const NET_ONLINE_ARGS = ['-wasmonline', '-cloudForceAvailable', '-sc_noOnlinePolicy', '-disablepackordercheck', '-netPrivilegesMultiplayer=1', '-netPrivilegesUserContent=1', '-netPrivilegesVoiceCommunication=1', '-netPrivilegesTextCommunication=1', '-netshoptransactionnull'];
+const netArgs = () => NET_TEST ? ['-lan', '-netrelaydisable', '-netpresenceserverdisable', '-netMpAccessCode=0', ...(q.get('skin') ? ['-wasmnetmodel=' + q.get('skin')] : []), ...(NET_TEST !== '1' && q.get('nohook') !== '1' && !NET_ONLINE ? ['-wasmnet=' + NET_TEST] : []), ...(NET_ONLINE ? NET_ONLINE_ARGS : []), ...(NET_WORLD ? ['-wasmworld'] : [])] : ['-nonetwork'];		// -netMpAccessCode=0: Access_Granted (CNetwork::CheckNetworkAccess wants ROS credentials, tunables and cloud background scripts)
+// Chrome on Windows rounds every wait with a timeout (Atomics.wait: the engine's sleeps, its 1 ms event waits, the frame limiter, the yields of its spin loops) up to the OS
+// timer tick, 15.6 ms, unless the renderer process has a timer below 16 ms pending, which switches the process to a fine tick (measured: a 1 ms wait takes 15.5 ms; with
+// this timer 2.1 ms, a 4 ms wait 5.0 ms). The game has no such timer, so every short sleep cost a whole tick: the limiter held a 60 fps cap to 37 fps and the visibility
+// wait added 15 ms to a frame. An empty callback; nothing else on this thread runs while the game plays.
+setInterval(() => {}, 1);
+// ?rtc=1: this page owns the WebRTC connections (Chrome has no RTCPeerConnection in workers: rtc_links.js) and serves the hub in the net worker through a MessageChannel. The tab's peer id is random
+// (?pid=N picks one for tests); ?rendezvous=<base URL of /rv> adds the rendezvous server (contract C6); ?ice=<stun url>,... adds ICE servers (none by default: host candidates only).
+// window.__rtc is the hub's state once a second (links, group, overlay, ghost counters) for the test driver.
+// The WebRTC connections: this page owns them (Chrome has no RTCPeerConnection in workers: rtc_links.js) and serves the hub in the net worker through a MessageChannel. The tab's peer id is random
+// (?pid=N picks one for tests); ?rendezvous=<base URL of /rv> adds the rendezvous server (contract C6); ?ice=<stun url>,... adds ICE servers (two free STUN servers by default).
+// window.__rtc is the hub's state once a second (links, group, overlay, ghost counters) for the test driver. Called once, by launchEngine, when the player chose a network mode.
+async function setupRtc() {
+	let rtcInfo = null;
+	try {
+		let pid = +(q.get('pid') || 0);
+		const rnd = new Uint32Array(1);
+		while (!(pid >= 1 && pid <= 0x7FFFFF) || (pid & 255) === 0 || (pid & 255) === 255) { crypto.getRandomValues(rnd); pid = rnd[0] & 0x7FFFFF; }		// below 0x800000: the pids from there up are the ambient entities of scale/ambient.js		// the low byte is never 0 or 255 (the engine reads x.y.z.255 as a broadcast)
+		for (const f of ['nat.js', 'rtc_links.html', ...(NET_WORLD ? ['trust.js', 'voice.js'] : [])]) await new Promise((ok, no) => { const s = document.createElement('script'); s.src = BASE + '/' + f; s.onload = ok; s.onerror = () => no(new Error('cannot load ' + f)); document.head.appendChild(s); });
+		// ?world=1 (MULTIPLAYER_PLAN step 8): the player id is the public key (trust.js Trust.pidOf), made here before anything else; the hub signs with the key.
+		// ?pid=N pins an id for local tests: the hubs then run with test ids (a key need not match its id).
+		let keyPair = null;
+		if (NET_WORLD && !q.get('pid')) { const id = await Trust.newIdentity(); pid = id.pid; keyPair = id.keyPair; }
+		const ch = new MessageChannel();
+		// ICE: two free STUN servers by default (a player needs one to learn its public address, the second tells nat.js whether the router is symmetric); ?ice=none = host candidates only (LAN / same machine), ?ice=url,url = your own
+		const iceArg = q.get('ice'), iceUrls = iceArg === null ? ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] : (iceArg === 'none' ? [] : iceArg.split(',').filter(Boolean));
+		const pageLinks = RtcLinks.serve(ch.port1, { pid, iceServers: iceUrls.map((u) => ({ urls: u })), onHub: (info) => { window.__rtc = info; onJoinInfo(info); }, log: (t) => console.log(t),
+			onApp: (o) => { if (!window.PageVoice) return; if (o.a === 'vin') PageVoice.onFrame(o); else if (o.a === 'ptt') PageVoice.setPtt(o.on); } });
+		// one world (?world=1, the Multiplayer item): proximity voice. The game's own push-to-talk (N) and chat window drive it through the hub (net_worker.js kind 15); voice.js records and plays.
+		if (NET_WORLD && window.PageVoice) PageVoice.init({ send: (o, tr) => pageLinks.toHub(o, tr) });
+		// the tab closes: every link hears goodbye (rtc_links close), so the players linked to this one remove it at once and tell theirs (net_worker.js playerLeft); a player that
+		// only goes quiet (the network) stays in their game a while instead (2026-11-03, "players never ever disconnect")
+		addEventListener('pagehide', () => { try { pageLinks.close(); } catch (e) { /* closing anyway */ } });
+		rtcInfo = { pid, port: ch.port2, relayLinks: q.get('links') === 'relay' ? (q.get('relay') || 'ws://127.0.0.1:8787/') : '', rendezvous: RV_URL, server: mpServer, noSignalWs: !LOCAL_PAGE && !q.get('relay'), scale: NET_SCALE, party: q.get('party') || '', world: MP_PAGE && !NET_WORLD, meshWorld: NET_WORLD, keyPair, testIds: NET_WORLD && !!q.get('pid'), buildTime: BUILD_TIME, viewMax: +(q.get('viewmax') || 0), noLink: (q.get('nolink') || '').split(',').map(Number).filter((n) => n > 0), scalecfg: Object.fromEntries((q.get('scalecfg') || '').split(',').filter(Boolean).map((s) => s.split(':')).map(([k, v]) => [k, v === '0' ? false : v === '1' ? true : +v])) };		// ?scalecfg=field:0,events:0,appearance:0,statsMs:5000: kill switches and options of the scale hub (hub_scale.js cfg)		// ?scale=1: the scale layer (SCALE_PLAN; phase3/scale/hub_scale.js) in the hub, and the engine gets ghost block v2
+		if (rtcInfo.rendezvous) addEventListener('pagehide', () => { if (!(window.__rtc && window.__rtc.greeter)) return; try { navigator.sendBeacon(rtcInfo.rendezvous.replace(/\/+$/, '') + '?a=leave', JSON.stringify({ pid })); } catch (e) { /* closing anyway */ } });		// only a greeter says goodbye (the rendezvous then drops its role, offers and inbox at once); everybody else costs the server nothing
+		console.log('rtc: peer id ' + pid);
+	} catch (e) { console.error('rtc: not available, falling back to the relay LAN: ' + e); }
+	return rtcInfo;
+}
+// The developer features' admin token that /dev (dev.html) keeps after the host checked the password: IndexedDB 'gta5-dev', store 'flags', key 'token' ("<expiry>.<signature>").
+// Resolves to the token while it has not expired, else null. Never throws: no IndexedDB or no database = null. (The old 'dev' = true flag alone no longer counts: log in at /dev.)
+function devFeaturesOn() {
+	return new Promise((ok) => {
+		try {
+			const r = indexedDB.open('gta5-dev', 1);
+			r.onupgradeneeded = () => r.result.createObjectStore('flags');
+			r.onerror = () => ok(null);
+			r.onsuccess = () => {
+				try {
+					const g = r.result.transaction('flags').objectStore('flags').get('token');
+					g.onsuccess = () => {
+						const t = g.result;
+						const live = typeof t === 'string' && /^\d{1,12}\.[0-9a-f]{128}$/.test(t) && +t.split('.')[0] * 1000 > Date.now();
+						if (typeof t === 'string' && !live) console.log('dev: the /dev login has expired: log in at /dev again');
+						ok(live ? t : null);
+					};
+					g.onerror = () => ok(null);
+				} catch (e) { ok(null); }
+			};
+		} catch (e) { ok(null); }
+	});
+}
+const buildArgs = () => ['-rootdir=/game/', ...(q.get('nogpu') ? [] : ['-wgpu']), '-nodisplaycalibration', '-noSocialClub', '-pc:nosocialclub', ...(q.get('newgame') === '1' ? ['-noautoload'] : []), ...netArgs(), ...(NET_SCALE ? ['-wasmghostv2'] : []), '-output', '-width=' + startSize[0], '-height=' + startSize[1], '-forceResolution', ...LOG_ARGS, ...ENGINE_ARGS, '-frameLimit=' + (q.get('fps') === '30' ? 2 : q.get('fps') === '0' ? 0 : 1),		// the game's own limiter: VSync 2 (its default) = 30 fps; 1 = 60 fps; ?fps=0 uncapped (diagnostics). Story Mode continues from the newest savegame (the engine skips that for Sandbox Mode); ?newgame=1 (-noautoload) starts it from the Prologue instead
+		 ...(cores <= 2 ? ['-numCores=' + cores] : []), ...(lowMemory ? LOW_ARGS : NORMAL_ARGS), ...(q.get('args') || '').split((q.get('args') || '').includes(';') ? ';' : ',').filter(Boolean)];		// ,		// ?args=a,b or, when a value has commas (-playercoords=x,y,z), ?args=a;b
+// A page of an older build (a tab kept open, a copy from the browser's cache) asks for /b/<old id>/ engine files, which the host answers with 404 (host/index.php build_marker):
+// it would otherwise have got today's files for some of them and its cached old ones for the rest, an engine of two builds ("RuntimeError: null function" at the first draw,
+// 2026-11-10). Checked with a HEAD past the cache, then one reload a minute at most (the current page); a second one in a minute asks the player to reload by hand.
+function staleBuildCheck(file) {
+	if (!BASE) return;
+	fetch(BASE + '/' + file, { method: 'HEAD', cache: 'no-store' }).then((r) => {
+		if (r.status !== 404) return;
+		let last = 0;
+		try { last = +sessionStorage.getItem('staleReloadAt') || 0; } catch (e) { /* no storage: reload anyway */ }
+		if (Date.now() - last < 60000) { hud.textContent = 'This page is out of date: press Ctrl+F5 to load the current version.'; return; }
+		try { sessionStorage.setItem('staleReloadAt', String(Date.now())); } catch (e) { /* ignore */ }
+		try { postLog('[page] ' + file + ' of build ' + BASE + ' is gone (404): reloading for the current build'); } catch (e) { /* ignore */ }
+		setTimeout(() => location.reload(), 300);
+	}, () => {});
+}
+const worker = new Worker(BASE + '/loader.js');
+	worker.onmessage = (ev) => {
+		if (ev.data.engineMsg) { fromEngine(ev.data.engineMsg); return; }
+		if (ev.data.staleBuild) { staleBuildCheck(ev.data.staleBuild); return; }
+		if (ev.data.enginePort) { ev.data.enginePort.onmessage = (e) => fromEngine(e.data); return; }
+		if (ev.data.hud) hud.textContent = ev.data.hud;
+		if (ev.data.input) installInput(ev.data.input.memory, ev.data.input.block, !!ev.data.input.vsync);
+		if (ev.data.audio) { audioPending = ev.data.audio; tryStartAudio(); }
+	};
+	worker.onerror = (e) => { hud.textContent = 'worker error: ' + e.message; staleBuildCheck('loader.html'); };
+	// 1. the loader starts at once (game.wasm, boot set, GPU pipelines); 2. launchEngine tells it the engine arguments and the network setup, which releases main().
+	worker.postMessage({
+		canvas: offscreen,
+		base: BASE,
+		shotEvery: +(q.get('shot') || 0),
+		shotRt: q.get('shotrt') === '1',		// ?shotrt=1 (with ?shot=N): every render target of one frame after the world is shown to the dev server's shots/ (wgpu_worker.js)
+		dbgPs: q.get('dbgps') || '',		// ?dbgps=<pixel shader name part>[&dbgpsn=N]: the GPU worker logs the state of the first N draws with that pixel shader (wgpu_worker.js WGPU_DEBUG_PS; diagnostics)
+		dbgPsN: +(q.get('dbgpsn') || 0),
+		noHints: q.get('nohints') === '1',		// ?nohints=1: do not fetch the streamer's queued reads ahead (io_worker.js drainHints; diagnostics)
+		noPack: q.get('nopack') === '1',		// ?nopack=1: fetch shaders one by one, not from the shader packs (wgpu_worker.js; diagnostics)
+		gpuLimits: q.get('limits') || '',		// ?limits=maxSampledTexturesPerShaderStage:16,... : request a smaller GPU device than the adapter offers (reproduces a weaker device's limits; wgpu_worker.js)
+		cores,
+		noStore: !!(q.get('nocache') || q.get('nosw')),
+		fullConsole: !!q.get('console'),
+		remoteLog,		// ?log=1 (above): loader.js passes it on to the engine threads and the GPU and io workers
+		trace: !!q.get('trace'),		// ?trace=1: log every engine file request (io_worker.js)
+		slots: +(q.get('slots') || 0),		// ?slots=N: frames in flight of the GPU worker (diagnostics)
+		syncPipelines: !!q.get('syncpipelines'),		// ?syncpipelines=1: the GPU worker compiles pipelines synchronously (no draws skipped while one compiles)
+		record: !!q.get('record'),		// ?record=1: log the boot read set (io_worker.js), for record_bootset.py
+		lowMemory,
+		noNanGuard: q.get('nanguard') === '0',
+		jsProf: q.get('jsprof') || '',
+		opStats: q.get('opstats') === '1',		// wgpu_worker.js opStats (diagnostics)		// wgpu_worker.js jsProfile (diagnostics; the server must send Document-Policy: js-profiling)		// wgpu_worker.js guardOutputs (diagnostics)
+		// The engine's streaming heap (models, textures, anims kept in system memory) in MB: the streamer fills whatever it is given and only evicts when it is full (measured standing
+		// still in the low profile without a cap: 1.1 -> 1.5 GB in 100 s). ?rscmb=N sets it; the low-memory profile caps it, the default profile keeps the PC size.
+		rscMB: +(q.get('rscmb') || 0) || (lowMemory ? 512 : 0),
+	}, [offscreen]);
+launchEngine = async () => {
+	if (launched) return;
+	launched = true;
+	waitingChoice = false;
+	document.getElementById('label').textContent = 'Starting the engine';
+	showModes();
+	const rtc = NET_RTC ? await setupRtc() : null;
+	joinWait = !!(rtc && rtc.rendezvous);		// the bottom-left line shows the join until the hub is in (onJoinInfo)
+	const args = buildArgs();
+	const devToken = await devFeaturesOn();
+	if (devToken) args.push('-WasmDev', '-WasmDevToken=' + devToken);		// /dev (dev.html): debug keyboard and flight in multiplayer, the Cheats item of the interaction menu; the engine checks the token's signature
+	worker.postMessage({ choice: { args, netUrl: NET_TEST ? (q.get('relay') || (LOCAL_PAGE ? 'ws://127.0.0.1:8787/' : 'rendezvous')) : '', rtc, keepThreads: (q.get('keep') || '').split(',').reduce((m, g) => m | ({ replay: 1, net: 2, idle: 8 }[g] || 0), 0) | (NET_TEST ? 2 : 0) } }, rtc ? [rtc.port] : []);		// netUrl: the virtual LAN's relay (net_worker.js), empty = no network worker; keepThreads: ?keep=replay,net,idle starts those thread groups (diagnostics), the network threads always run for a network mode
+};
+if (startMode || MP_PAGE || NET_TEST) launchEngine();		// (launchEngine adds the Players panel in one-world mode)		// chosen already: ?mode=, ?mp=1, the test pages
+else { waitingChoice = true; modesEl.classList.add('ask'); showModes(); }		// the title screen asks; nothing starts until the player picks
+}
+
+// ?mem=1 (diagnostics, needs ?log=1): performance.measureUserAgentSpecificMemory() every 15 s (needs cross-origin isolation), posted to the dev server's log.
+if (remoteLog && (q.get('mem') || lowMemory) && performance.measureUserAgentSpecificMemory) {		// with ?log=1 on by default in the low-memory profile: the last reading before a crash/stall is in the log
+	const report = async () => {
+		try {
+			const r = await performance.measureUserAgentSpecificMemory();
+			const rows = r.breakdown.filter((b) => b.bytes > 1e6).map((b) => (b.bytes / 1048576 | 0) + ' MB ' + (b.types || []).join('+') + ' ' + (b.attribution || []).map((a) => (a.url || '').split('/').pop() + '/' + (a.scope || '')).join(','));
+			postLog('[page mem] total ' + (r.bytes / 1048576 | 0) + ' MB; ' + rows.join(' | '));
+		} catch (e) { postLog('[page mem] failed: ' + e); }
+		setTimeout(report, 15000);
+	};
+	setTimeout(report, 15000);
+}
+
+// ---- audio: the engine mixer writes into a ring in shared memory (platform/audio/browser_audio_wasm.cpp); an AudioWorklet plays it -------------------
+// Browsers only allow audio after a user gesture: the context is created on the first click/key press.
+let audioPending = null, audioGesture = false, audioStarted = false;
+function tryStartAudio() {
+	if (!audioPending || !audioGesture || audioStarted) return;
+	audioStarted = true;
+	(async () => {
+		try {
+			const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+			await ctx.audioWorklet.addModule(BASE + '/audio-worklet.js');
+			const node = new AudioWorkletNode(ctx, 'game-audio', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: audioPending });
+			node.connect(ctx.destination);
+			await ctx.resume();
+			addEventListener('pointerdown', () => ctx.resume());
+			addEventListener('keydown', () => ctx.resume());
+			if (q.get('mem')) {		// diagnostics: ring state every 5 s
+				const hdr = new Int32Array(audioPending.memory.buffer, audioPending.ring, 8);
+				setInterval(() => postLog('[page audio] state ' + ctx.state + ', frames written ' + (hdr[0] >>> 0) + ', read ' + (hdr[1] >>> 0) + ', fill ' + (((hdr[0] - hdr[1]) >>> 0)) + ', worklet calls ' + (hdr[3] >>> 0) + ', peak ' + (Atomics.exchange(hdr, 4, 0) / 1e6).toFixed(3)), 5000);
+			}
+			postLog('[page] audio started: ' + ctx.sampleRate + ' Hz, base latency ' + ctx.baseLatency);
+		} catch (e) { audioStarted = false; postLog('[page] audio failed: ' + e); }
+	})();
+}
+for (const type of ['pointerdown', 'keydown']) addEventListener(type, () => { audioGesture = true; tryStartAudio(); }, { capture: true });
+
+// ---- input: DOM events -> the engine's input block in shared memory (platform/input/browser_input_wasm.cpp) ------------------------
+// Layout of WasmInputBlock: 256 key bytes, then int32 words: mouseX, mouseY, dX, dY, dZ, buttons, focus, locked, textHead, textTail, text[64] (uint16).
+const VK = {
+	Backspace: 0x08, Tab: 0x09, Enter: 0x0D, NumpadEnter: 0xFD, Pause: 0x13, CapsLock: 0x14, Escape: 0x1B, Space: 0x20, PageUp: 0x21, PageDown: 0x22,
+	End: 0x23, Home: 0x24, ArrowLeft: 0x25, ArrowUp: 0x26, ArrowRight: 0x27, ArrowDown: 0x28, PrintScreen: 0x2C, Insert: 0x2D, Delete: 0x2E,
+	MetaLeft: 0x5B, MetaRight: 0x5C, ContextMenu: 0x5D, NumpadMultiply: 0x6A, NumpadAdd: 0x6B, NumpadSubtract: 0x6D, NumpadDecimal: 0x6E, NumpadDivide: 0x6F,
+	NumLock: 0x90, ScrollLock: 0x91, ShiftLeft: 0xA0, ShiftRight: 0xA1, ControlLeft: 0xA2, ControlRight: 0xA3, AltLeft: 0xA4, AltRight: 0xA5,
+	Semicolon: 0xBA, Equal: 0xBB, Comma: 0xBC, Minus: 0xBD, Period: 0xBE, Slash: 0xBF, Backquote: 0xC0, BracketLeft: 0xDB, Backslash: 0xDC, BracketRight: 0xDD,
+	Quote: 0xDE, IntlBackslash: 0xE2,
+};
+for (let i = 0; i < 10; i++) { VK['Digit' + i] = 0x30 + i; VK['Numpad' + i] = 0x60 + i; }
+for (let i = 0; i < 26; i++) VK['Key' + String.fromCharCode(65 + i)] = 0x41 + i;
+for (let i = 1; i <= 24; i++) VK['F' + i] = 0x6F + i;
+
+// ?dbg=1: draw isolation for hunting rendering artifacts. The GPU worker runs only the first N draws of each frame (N in the input block, -1 = all) and
+// reports the pipeline of the last one it ran. Find the smallest N at which the artifact appears: that draw paints it. F1/F2: N -1/+1, F3/F4: N -25/+25,
+// F5: back to all draws, F6: write the current draw to the server log (the log is what to send).
+function installDebugPanel(memory, block) {
+	const dbg = new Int32Array(memory.buffer, block + 424, 2);
+	const panel = document.createElement('div');
+	panel.style.cssText = 'position:fixed;left:0;top:0;right:0;background:#000c;color:#8f8;font:12px monospace;padding:4px 8px;z-index:9;white-space:pre-wrap;pointer-events:none';
+	document.body.appendChild(panel);
+	let last = '', total = 0;
+	new BroadcastChannel('game-debug').onmessage = (ev) => { last = ev.data.last; total = ev.data.total; render(); };
+	const render = () => { const n = Atomics.load(dbg, 0); panel.textContent = 'DRAW ISOLATION  limit ' + (n < 0 ? 'off (all)' : n) + ' of ' + total + ' draws/frame   [F1 -1  F2 +1  F3 -25  F4 +25  F5 all  F6 log]\nlast draw run: ' + (last || '-'); };
+	addEventListener('keydown', (e) => {
+		const step = { F1: -1, F2: 1, F3: -25, F4: 25 }[e.code];
+		if (step !== undefined) {
+			const n = Atomics.load(dbg, 0);
+			Atomics.store(dbg, 0, Math.max(0, Math.min(total, (n < 0 ? total : n) + step)));
+			e.preventDefault(); render();
+		} else if (e.code === 'F5' && !e.ctrlKey) { Atomics.store(dbg, 0, -1); e.preventDefault(); render(); }
+		else if (e.code === 'F6') { postLog('[debug draw] limit ' + Atomics.load(dbg, 0) + ' of ' + total + ' | ' + last); e.preventDefault(); }
+	}, { capture: true });
+	render();
+}
+
+function installInput(memory, block, hasVsync) {
+	if (q.get('dbg')) installDebugPanel(memory, block);
+	const keys = new Uint8Array(memory.buffer, block, 256);
+	const w = new Int32Array(memory.buffer, block + 256, 10);
+	const U16 = new Uint16Array(memory.buffer, block + 256 + 40, 64);
+	const MX = 0, MY = 1, DX = 2, DY = 3, DZ = 4, BTN = 5, FOCUS = 6, LOCKED = 7, HEAD = 8, TAIL = 9;
+	let W = startSize[0], H = startSize[1];		// back buffer size in device pixels (mouse clamping); updated when the window is resized
+	const ext = new Int32Array(memory.buffer, block + 424, 4);		// dbgDrawLimit, dbgFrameDraws, winW, winH
+	startModeWord = new Int32Array(memory.buffer, block + 440, 1);		// startMode (the start menu above)
+	if (startMode) Atomics.store(startModeWord, 0, startMode);
+	// Display refreshes for the engine's frame limiter (WasmInputBlock.vsyncTick / vsyncHz, browser_input_wasm.cpp wasm_vsync_pace): count every animation frame
+	// (notify wakes the limiter's futex) and report the refresh rate, the median of the last 60 frame intervals. Hidden tabs get no animation frames: the
+	// limiter notices and uses its timed 60 fps cap.
+	const vsync = new Int32Array(memory.buffer, block + 444, 2);
+	const gaps = [];
+	let lastFrameAt = 0, hzSent = 0;
+	const onFrame = (t) => {
+		Atomics.add(vsync, 0, 1);
+		Atomics.notify(vsync, 0);
+		if (lastFrameAt && t - lastFrameAt > 0 && t - lastFrameAt < 100) {
+			gaps.push(t - lastFrameAt);
+			if (gaps.length > 60) gaps.shift();
+			if (gaps.length === 60) {
+				const hz = Math.round(1000 / [...gaps].sort((a, b) => a - b)[30]);
+				if (Math.abs(hz - hzSent) > 2) { hzSent = hz; Atomics.store(vsync, 1, hz); trace('display refresh ' + hz + ' Hz (frame limiter)'); }
+			}
+		}
+		lastFrameAt = t;
+		requestAnimationFrame(onFrame);
+	};
+	if (hasVsync) requestAnimationFrame(onFrame);
+	Atomics.store(ext, 2, W); Atomics.store(ext, 3, H);
+	if (!q.get('fixed')) {
+		let timer = 0;
+		addEventListener('resize', () => {
+			clearTimeout(timer);
+			timer = setTimeout(() => {
+				const [w, h] = wantSize();
+				if (w === W && h === H) return;
+				W = w; H = h;
+				Atomics.store(ext, 2, w); Atomics.store(ext, 3, h);
+				trace('window resized: back buffer ' + w + 'x' + h);
+			}, 150);
+		});
+	}
+	Atomics.store(w, FOCUS, document.hasFocus() ? 1 : 0);
+	Atomics.store(w, MX, W >> 1);
+	Atomics.store(w, MY, H >> 1);
+
+	// Input tracing: the first events the page sees and where they go (POST /log), so a session that loses its keyboard says at which stage
+	let traced = 0;
+	const trace = (msg) => { if (traced < 80) { traced++; postLog('[page input] ' + msg); } };
+	const passThrough = (e) => e.code === 'F12' || e.code === 'F11' || (e.ctrlKey && e.shiftKey && (e.code === 'KeyI' || e.code === 'KeyJ')) || e.code === 'F5'
+		|| ((e.ctrlKey || e.metaKey) && e.code === 'KeyC' && String(getSelection() || '').length > 0);		// copying selected text (the start screen's announcement)
+	// Aircraft and submarine pitch and roll are on the numpad in the game (8/2/4/6, target select 7/9), which many keyboards lack. The numpad keys are bound to nothing else, so I/K (pitch), J/L (roll)
+	// and U/O (target left/right) press the same keys for the engine; the real numpad keeps working.
+	const FLY_ALIAS = { KeyI: 'Numpad8', KeyK: 'Numpad2', KeyJ: 'Numpad4', KeyL: 'Numpad6', KeyU: 'Numpad7', KeyO: 'Numpad9' };
+	const held = new Set();
+	const syncFlyAlias = () => { for (const [src, target] of Object.entries(FLY_ALIAS)) Atomics.store(keys, VK[target], held.has(src) || held.has(target) ? 0x80 : 0); };
+	addEventListener('keydown', (e) => {
+		if (passThrough(e)) return;
+		e.preventDefault();
+		const vk = VK[e.code];
+		if (!e.repeat) trace('keydown ' + e.code + ' vk=' + (vk || 'UNMAPPED') + ' hasFocus=' + document.hasFocus() + ' engineFocus=' + Atomics.load(w, FOCUS));
+		if (vk) Atomics.store(keys, vk, 0x80);
+		held.add(e.code); syncFlyAlias();
+		if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+			const head = Atomics.load(w, HEAD);
+			if (((head - Atomics.load(w, TAIL)) >>> 0) < 64) { U16[head & 63] = e.key.charCodeAt(0); Atomics.store(w, HEAD, (head + 1) | 0); }
+		} else if (e.code === 'Backspace' || e.code === 'Enter') {
+			const head = Atomics.load(w, HEAD);
+			if (((head - Atomics.load(w, TAIL)) >>> 0) < 64) { U16[head & 63] = e.code === 'Enter' ? 13 : 8; Atomics.store(w, HEAD, (head + 1) | 0); }
+		}
+	});
+	addEventListener('keyup', (e) => {
+		if (passThrough(e)) return;
+		e.preventDefault();
+		const vk = VK[e.code];
+		if (vk) Atomics.store(keys, vk, 0);
+		held.delete(e.code); syncFlyAlias();
+	});
+	const releaseAll = () => { held.clear(); for (let i = 0; i < 256; i++) Atomics.store(keys, i, 0); Atomics.store(w, BTN, 0); };
+	addEventListener('focus', () => { trace('window focus'); Atomics.store(w, FOCUS, 1); });
+	addEventListener('blur', () => { trace('window blur (all keys released)'); Atomics.store(w, FOCUS, 0); releaseAll(); });
+
+	const locked = () => document.pointerLockElement === canvas;
+	canvas.addEventListener('mousedown', (e) => {
+		if (!locked()) { canvas.requestPointerLock({ unadjustedMovement: true }).catch(() => canvas.requestPointerLock()); }
+		Atomics.or(w, BTN, 1 << [0, 2, 1, 3, 4][e.button]);
+		e.preventDefault();
+	});
+	addEventListener('mouseup', (e) => { Atomics.and(w, BTN, ~(1 << [0, 2, 1, 3, 4][e.button])); });
+	addEventListener('contextmenu', (e) => e.preventDefault());
+	document.addEventListener('pointerlockchange', () => { trace('pointer lock ' + (locked() ? 'on' : 'off')); Atomics.store(w, LOCKED, locked() ? 1 : 0); });
+	addEventListener('mousemove', (e) => {
+		const r = canvas.getBoundingClientRect();
+		if (locked()) {
+			Atomics.add(w, DX, e.movementX);
+			Atomics.add(w, DY, e.movementY);
+			const x = Math.max(0, Math.min(W - 1, Atomics.load(w, MX) + e.movementX));
+			const y = Math.max(0, Math.min(H - 1, Atomics.load(w, MY) + e.movementY));
+			Atomics.store(w, MX, x);
+			Atomics.store(w, MY, y);
+		} else {
+			const x = Math.max(0, Math.min(W - 1, Math.round((e.clientX - r.left) * W / r.width)));
+			const y = Math.max(0, Math.min(H - 1, Math.round((e.clientY - r.top) * H / r.height)));
+			Atomics.add(w, DX, x - Atomics.load(w, MX));
+			Atomics.add(w, DY, y - Atomics.load(w, MY));
+			Atomics.store(w, MX, x);
+			Atomics.store(w, MY, y);
+		}
+	});
+	// Notches from the real scroll distance: Chrome reports ~100 px per notch on Windows (pixel mode), 3 lines in line mode; fractions (trackpads, smooth
+	// scrolling) accumulate. The engine consumes one notch per frame (browser_input_wasm.cpp), so a long scroll keeps scrolling for a few frames.
+	let wheelAccum = 0;
+	addEventListener('wheel', (e) => {
+		e.preventDefault();
+		wheelAccum += -e.deltaY / (e.deltaMode === 0 ? 100 : e.deltaMode === 1 ? 3 : 1);
+		const n = Math.trunc(wheelAccum);
+		if (n) { wheelAccum -= n; Atomics.add(w, DZ, n); }
+	}, { passive: false });
+}
+</script>
+</body>
+
+<!-- Mirrored from https://playgta5.com/ by HTTrack Website Copier/3.x [XR&CO], Sat, 21 Nov 2026 16:31:17 GMT -->
+</html>
